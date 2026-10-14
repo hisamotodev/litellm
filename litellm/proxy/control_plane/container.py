@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
+from opentelemetry.sdk.trace import TracerProvider
 
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -26,6 +27,7 @@ from litellm.proxy.control_plane.auth.rbac import (
     parse_role_definition,
 )
 from litellm.proxy.control_plane.common.fanout import Fanout
+from litellm.proxy.control_plane.common.tracing import Telemetry, build_telemetry
 from litellm.proxy.control_plane.dataplanes.client import DataplaneClient, HttpTransport, RetryPolicy
 from litellm.proxy.control_plane.dataplanes.credentials import TokenExchanger, http_token_exchanger
 from litellm.proxy.control_plane.dataplanes.registry import DataplaneRegistry, build_registry
@@ -43,6 +45,7 @@ class Container:
     dataplane_client: DataplaneClient
     fanout: Fanout
     audit_log: AuditLog
+    telemetry: Telemetry
 
 
 class InvalidRolePolicy(ValueError):
@@ -111,6 +114,7 @@ def build_container(
     jwks: JwksKeyLookup | None = None,
     transport: HttpTransport | None = None,
     exchanger: TokenExchanger | None = None,
+    tracer_provider: TracerProvider | None = None,
 ) -> Container:
     master_key: Final = settings.master_key.get_secret_value()
     policy: Final = build_role_policy(settings)
@@ -128,6 +132,7 @@ def build_container(
         policy=policy,
     )
     password: Final = settings.ui_password
+    telemetry: Final = build_telemetry(settings, tracer_provider)
     return Container(
         settings=settings,
         policy=policy,
@@ -145,7 +150,9 @@ def build_container(
             transport=http,
             timeout_seconds=settings.dataplane_timeout_seconds,
             retry=RetryPolicy(attempts=settings.dataplane_retry_attempts),
+            tracing=telemetry.recorder,
         ),
         fanout=Fanout(concurrency=settings.fanout_concurrency),
         audit_log=build_audit_log(settings.audit_capacity),
+        telemetry=telemetry,
     )
